@@ -1,0 +1,10 @@
+{
+  "phase_results_processors": [
+    {
+      "normalization-processor": {
+        "normalization": { "technique": "min_max" },
+        "combination": { "technique": "arithmetic_mean", "parameters": {"weights":[0.4,0.6]} }
+      }
+    }
+  ]
+}

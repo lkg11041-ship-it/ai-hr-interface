@@ -1,0 +1,37 @@
+version: "3.8"
+services:
+  llm8b:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-8b
+    command: >
+      --model meta-llama/Meta-Llama-3.1-8B-Instruct
+      --dtype float16
+      --max-model-len 8192
+      --port 8001
+    environment:
+      - HF_HOME=/data/hf
+      - HF_TOKEN=${HF_TOKEN:-}
+    ports: ["8001:8001"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+  llm70b:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-70b
+    command: >
+      --model meta-llama/Meta-Llama-3.1-70B-Instruct
+      --tensor-parallel-size 2
+      --dtype float16
+      --max-model-len 8192
+      --port 8002
+    environment:
+      - HF_HOME=/data/hf
+      - HF_TOKEN=${HF_TOKEN:-}
+    ports: ["8002:8002"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

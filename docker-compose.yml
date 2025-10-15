@@ -1,0 +1,148 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: recruit-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ}
+    ports: ["${POSTGRES_PORT}:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  # 🔧 PRODUCTION: 외부 OpenSearch 클러스터 사용 시 이 서비스 제거
+  # docker-compose.prod.yml에서 opensearch 서비스를 주석 처리하고
+  # OPENSEARCH_URL 환경변수를 외부 클러스터 주소로 변경
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: opensearch
+    environment:
+      - discovery.type=single-node  # 🔧 PRODUCTION: 클러스터 모드로 변경
+      - plugins.security.disabled=true  # ⚠️ PRODUCTION: 반드시 false로 변경 (보안 활성화)
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"  # 🔧 PRODUCTION: 서버 메모리에 맞게 조정 (권장: 힙 메모리 16~32GB)
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    ports: ["9200:9200"]  # 🔧 PRODUCTION: 외부 접근 차단 고려 (내부망만 허용)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - os_data:/usr/share/opensearch/data
+      - ./infra/opensearch:/usr/share/opensearch/config/user-conf:ro
+
+  opensearch-dash:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    container_name: opensearch-dashboards
+    ports: ["5601:5601"]
+    environment:
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+    depends_on: [opensearch]
+
+  airflow-webserver:
+    build: ./airflow
+    container_name: airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__RBAC: "True"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__TEST_CONNECTION: "Enabled"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+      TZ: ${TZ}
+    command: bash -c "airflow db migrate && airflow users create --role Admin --username $$ _AIRFLOW_WWW_USER_USERNAME --password $$ _AIRFLOW_WWW_USER_PASSWORD --firstname Admin --lastname User --email admin@example.com || true && airflow webserver"
+    ports: ["8081:8080"]
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - postgres
+
+  airflow-scheduler:
+    build: ./airflow
+    container_name: airflow-scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      TZ: ${TZ}
+      # Oracle source connection
+      ORACLE_HOST: oracle-new
+      ORACLE_PORT: 1521
+      ORACLE_SERVICE: XEPDB1
+      ORACLE_USER: hr
+      ORACLE_PASSWORD: admin1234
+      # PostgreSQL target connection
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # OpenSearch connection
+      # 🔧 PRODUCTION: 외부 OpenSearch URL로 변경 (예: http://10.0.0.13:9200)
+      OPENSEARCH_URL: ${OPENSEARCH_URL}
+      OS_CAND_INDEX: candidates
+      # 🔧 PRODUCTION: 보안이 활성화된 경우 추가
+      # OPENSEARCH_USER: admin
+      # OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
+      # Embedding configuration
+      EMBED_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBED_DIM: 384
+    command: bash -c "airflow scheduler"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - airflow-webserver
+
+  backend:
+    build: ./backend
+    container_name: recruit-backend
+    environment:
+      OPENSEARCH_URL: ${OPENSEARCH_URL}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      LLM8B_URL: ${LLM8B_URL}
+      LLM70B_URL: ${LLM70B_URL}
+      LLM8B_MODEL: ${LLM8B_MODEL}
+      LLM70B_MODEL: ${LLM70B_MODEL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBED_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBED_DIM: 384
+      TZ: ${TZ}
+    ports: ["8000:8000"]
+    volumes:
+      - ./backend:/app
+      - ./scripts:/app/scripts
+      - ./infra:/app/infra
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+
+  frontend:
+    build: ./frontend
+    container_name: recruit-frontend
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE}
+      TZ: ${TZ}
+    ports: ["5173:5173"]
+    volumes:
+      - ./frontend:/usr/src/app
+      - /usr/src/app/node_modules
+    command: ["npm", "run", "dev", "--", "--host"]
+
+volumes:
+  pg_data:
+  os_data:

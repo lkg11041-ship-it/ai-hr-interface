@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+opensearch-py
+psycopg2-binary
+pandas
+pandera
+python-dotenv
+sentence-transformers
+numpy
+SQLAlchemy
