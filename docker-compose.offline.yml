@@ -95,9 +95,6 @@ services:
     container_name: airflow-scheduler
     image: recruit-airflow:offline
     pull_policy: never
-    build:
-      context: ./airflow
-      dockerfile: Dockerfile.offline
 
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
