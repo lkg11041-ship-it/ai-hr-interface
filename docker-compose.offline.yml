@@ -1,54 +1,38 @@
 # ============================================================================
-# Docker Compose for Offline (Air-Gapped) Production Environment
+# Docker Compose for Offline (Air-Gapped) Airflow Deployment
 # ============================================================================
 #
-# 이 파일은 폐쇄망 환경에서 Airflow를 배포하기 위한 설정입니다.
+# Oracle → PostgreSQL ETL 전용 폐쇄망 배포 설정
 #
 # 사용 방법:
-#   docker compose -f docker-compose.yml -f docker-compose.offline.yml --env-file .env up -d
+#   docker compose -f docker-compose.offline.yml --env-file .env up -d
 #
 # 사전 준비:
-#   1. 모든 Docker 이미지를 tar 파일로 저장
+#   1. Airflow Docker 이미지를 tar 파일로 저장
 #   2. 폐쇄망 서버로 전송
 #   3. docker load로 이미지 로드
 #   4. 이 파일 사용하여 배포
+#
+# 주의:
+#   - PostgreSQL과 Oracle은 외부 DB를 사용합니다 (.env에 설정)
+#   - OpenSearch 벡터 인덱싱 기능은 포함되지 않습니다
 # ============================================================================
 
 version: "3.8"
 
 services:
   # ==========================================================================
-  # PostgreSQL (폐쇄망에서는 외부 DB 사용 권장)
-  # ==========================================================================
-  postgres:
-    profiles: ["with-local-db"]  # 로컬 DB 사용 시에만 활성화
-    image: postgres:16
-    # 이미지 pull 정책: 로컬 이미지만 사용
-    pull_policy: never
-
-  # ==========================================================================
-  # OpenSearch (폐쇄망에서는 외부 클러스터 사용 권장)
-  # ==========================================================================
-  opensearch:
-    profiles: ["with-local-search"]  # 로컬 OpenSearch 사용 시에만 활성화
-    image: opensearchproject/opensearch:2.13.0
-    pull_policy: never
-
-  opensearch-dash:
-    profiles: ["with-local-search"]
-    image: opensearchproject/opensearch-dashboards:2.13.0
-    pull_policy: never
-
-  # ==========================================================================
   # Airflow Webserver (폐쇄망 전용 이미지 사용)
   # ==========================================================================
   airflow-webserver:
+    container_name: airflow-webserver
     # 폐쇄망 전용 이미지 사용 (미리 빌드된 이미지)
     image: recruit-airflow:offline
     pull_policy: never
     build:
       context: ./airflow
       dockerfile: Dockerfile.offline
+
     environment:
       # Airflow 설정
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -65,34 +49,19 @@ services:
       # Timezone
       TZ: ${TZ:-Asia/Seoul}
 
-      # 외부 DB 연결 (필수)
+      # 외부 PostgreSQL 연결 (필수)
       POSTGRES_HOST: ${POSTGRES_HOST}
       POSTGRES_PORT: ${POSTGRES_PORT}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
-      # Oracle 연결
+      # Oracle 연결 (ETL 소스)
       ORACLE_HOST: ${ORACLE_HOST}
       ORACLE_PORT: ${ORACLE_PORT}
       ORACLE_SERVICE: ${ORACLE_SERVICE}
       ORACLE_USER: ${ORACLE_USER}
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
-
-      # OpenSearch 연결
-      OPENSEARCH_URL: ${OPENSEARCH_URL}
-      OPENSEARCH_USER: ${OPENSEARCH_USER:-}
-      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
-      OS_CAND_INDEX: ${OS_CAND_INDEX:-candidates}
-
-      # Embedding 설정
-      EMBED_MODEL: sentence-transformers/all-MiniLM-L6-v2
-      EMBED_DIM: 384
-
-      # 🔧 OFFLINE: HuggingFace 모델 캐시 디렉토리 (이미지에 포함된 모델 사용)
-      TRANSFORMERS_CACHE: /opt/airflow/.cache/huggingface
-      HF_HOME: /opt/airflow/.cache/huggingface
-      SENTENCE_TRANSFORMERS_HOME: /opt/airflow/.cache/sentence_transformers
 
     command: >
       bash -c "
@@ -108,8 +77,6 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-      # 🔧 OFFLINE: 모델 캐시 볼륨 (재시작 시 모델 보존)
-      - airflow_cache:/opt/airflow/.cache
 
     restart: unless-stopped
 
@@ -125,17 +92,19 @@ services:
   # Airflow Scheduler (폐쇄망 전용 이미지 사용)
   # ==========================================================================
   airflow-scheduler:
+    container_name: airflow-scheduler
     image: recruit-airflow:offline
     pull_policy: never
     build:
       context: ./airflow
       dockerfile: Dockerfile.offline
+
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       TZ: ${TZ:-Asia/Seoul}
 
-      # 외부 DB 연결
+      # 외부 PostgreSQL 연결
       POSTGRES_HOST: ${POSTGRES_HOST}
       POSTGRES_PORT: ${POSTGRES_PORT}
       POSTGRES_DB: ${POSTGRES_DB}
@@ -149,29 +118,12 @@ services:
       ORACLE_USER: ${ORACLE_USER}
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
 
-      # OpenSearch 연결
-      OPENSEARCH_URL: ${OPENSEARCH_URL}
-      OPENSEARCH_USER: ${OPENSEARCH_USER:-}
-      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
-      OS_CAND_INDEX: ${OS_CAND_INDEX:-candidates}
-
-      # Embedding 설정
-      EMBED_MODEL: sentence-transformers/all-MiniLM-L6-v2
-      EMBED_DIM: 384
-
-      # 🔧 OFFLINE: HuggingFace 모델 캐시 (이미지에 포함된 모델 사용)
-      TRANSFORMERS_CACHE: /opt/airflow/.cache/huggingface
-      HF_HOME: /opt/airflow/.cache/huggingface
-      SENTENCE_TRANSFORMERS_HOME: /opt/airflow/.cache/sentence_transformers
-
     command: bash -c "airflow scheduler"
 
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-      # 🔧 OFFLINE: 모델 캐시 볼륨 (webserver와 공유)
-      - airflow_cache:/opt/airflow/.cache
 
     restart: unless-stopped
 
@@ -179,69 +131,16 @@ services:
       airflow-webserver:
         condition: service_healthy
 
-  # ==========================================================================
-  # Backend (폐쇄망에서는 별도 빌드 필요)
-  # ==========================================================================
-  backend:
-    image: recruit-backend:offline
-    pull_policy: never
-    build:
-      context: ./backend
-    environment:
-      RUN_MODE: ${RUN_MODE:-prod}
-      OPENSEARCH_URL: ${OPENSEARCH_URL}
-      POSTGRES_HOST: ${POSTGRES_HOST}
-      POSTGRES_PORT: ${POSTGRES_PORT}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      LLM8B_URL: ${LLM8B_URL}
-      LLM70B_URL: ${LLM70B_URL}
-      LLM8B_MODEL: ${LLM8B_MODEL}
-      LLM70B_MODEL: ${LLM70B_MODEL}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      EMBED_MODEL: sentence-transformers/all-MiniLM-L6-v2
-      EMBED_DIM: 384
-      TZ: ${TZ:-Asia/Seoul}
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
-    volumes:
-      - ./backend:/app
-      - ./scripts:/app/scripts
-      - ./infra:/app/infra
-    restart: unless-stopped
-
-  # ==========================================================================
-  # Frontend (폐쇄망에서는 별도 빌드 필요)
-  # ==========================================================================
-  frontend:
-    image: recruit-frontend:offline
-    pull_policy: never
-    build:
-      context: ./frontend
-    environment:
-      VITE_API_BASE: ${VITE_API_BASE:-http://backend:8000}
-      TZ: ${TZ:-Asia/Seoul}
-    ports:
-      - "${FRONTEND_PORT:-5173}:5173"
-    volumes:
-      - ./frontend:/usr/src/app
-      - /usr/src/app/node_modules
-    command: ["npm", "run", "dev", "--", "--host"]
-    restart: unless-stopped
-
 # ============================================================================
 # Volumes (Named Volumes for Data Persistence)
 # ============================================================================
 volumes:
   airflow_logs:
     driver: local
-  airflow_cache:
-    driver: local
-    # 🔧 OFFLINE: 임베딩 모델 캐시 저장 (약 80MB)
+    # Airflow 로그 저장
 
 # ============================================================================
-# Networks (Optional)
+# Networks
 # ============================================================================
 networks:
   default:

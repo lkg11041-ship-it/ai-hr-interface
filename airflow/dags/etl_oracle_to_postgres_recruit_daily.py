@@ -18,11 +18,11 @@ default_args = {
 with DAG(
     dag_id="etl_oracle_to_postgres_recruit_daily",
     default_args=default_args,
-    description='Daily ETL: Oracle HR.RECRUITMENT -> PostgreSQL app.recruitment with full reload strategy',
+    description='Daily ETL: Oracle app.applicant_info -> PostgreSQL app.applicant_info with full reload strategy',
     schedule_interval="30 2 * * *",  # 매일 02:30 실행
     start_date=datetime(2025, 10, 3),
     catchup=False,
-    tags=["etl", "oracle", "postgres", "recruitment", "production"],
+    tags=["etl", "oracle", "postgres", "applicant_info", "production"],
 ) as dag:
 
     # Task 1: 시작 로그 기록

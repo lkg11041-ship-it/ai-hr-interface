@@ -1,7 +1,9 @@
 """
-Oracle to PostgreSQL ETL Script for RECRUITMENT table
+Oracle to PostgreSQL ETL Script for APPLICANT_INFO table
 Strategy: Full Reload (Truncate & Load)
 Features: Logging, Error handling, Data retention policy (3 years)
+Source: app.applicant_info (Oracle)
+Target: app.applicant_info (PostgreSQL)
 """
 
 import os
@@ -29,10 +31,11 @@ PG_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 
 # Constants
 DAG_ID = "etl_oracle_to_postgres_recruit_daily"
-SOURCE_TABLE = "RECRUITMENT"
+SOURCE_SCHEMA = "app"
+SOURCE_TABLE = "applicant_info"
 TARGET_SCHEMA = "app"
-TARGET_TABLE = "recruitment"
-STAGE_TABLE = "recruitment_stage"
+TARGET_TABLE = "applicant_info"
+STAGE_TABLE = "applicant_info_stage"
 RETENTION_YEARS = 3
 BATCH_SIZE = 1000
 
@@ -82,7 +85,7 @@ def log_run_start():
             """, (
                 DAG_ID,
                 'log_start',
-                f"HR.{SOURCE_TABLE}",
+                f"{SOURCE_SCHEMA}.{SOURCE_TABLE}",
                 f"{TARGET_SCHEMA}.{TARGET_TABLE}",
                 'IN_PROGRESS',
                 _extraction_data['started_at']
@@ -96,20 +99,47 @@ def log_run_start():
 
 def extract_from_oracle():
     """Oracle에서 전체 데이터 추출"""
-    print(f"[{datetime.now()}] Extracting data from Oracle: HR.{SOURCE_TABLE}")
+    print(f"[{datetime.now()}] Extracting data from Oracle: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
 
     try:
         with get_oracle_connection() as conn:
             with conn.cursor() as cur:
-                # 전체 데이터 조회
+                # 전체 데이터 조회 (app.applicant_info의 모든 컬럼)
                 select_sql = f"""
                     SELECT
-                        ID, CANDIDATE_ID, FULL_NAME, GENDER, BIRTH_YEAR,
-                        EDUCATION_LEVEL, YEARS_EXPERIENCE, INDUSTRY, ROLE_TITLE,
-                        RESUME_TEXT, UPDATED_AT
-                    FROM {SOURCE_TABLE}
+                        APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
+                        BIRDT, ADRESS, NATION, APPLY_PATH, BOHUN_YN,
+                        BOHUN_RELATION, DISABLED_NM, DISABLED, HOBBY, HIGHSCHOOL,
+                        HIGH_FLAG1, HIGH_FLAG2, HIGH_G_YM, HIGH_G_FLAG, HIGH_LOC,
+                        JUNIOR_COLLEGE, JUNIOR_COLLEGE_FLAG1, JUNIOR_COLLEGE_FLAG2, JUNIOR_COLLEAGE_SPEC, JUNIOR_ENTER_YM,
+                        JUNIOR_ENTER_FLAG, JUNIOR_G_YM, JUNIOR_G_FLAG, JUNIOR_LOC, UNIVERSITY,
+                        UNIVERSITY_FLAG1, UNIVERSITY_FLAG2, UNIVERSITY_SPEC, UNIVERSITY_SPEC_SUB, UNIVERSITY_ENTER_YM,
+                        UNIVERSITY_ENTER_FLAG, UNIVERSITY_G_YM, UNIVERSITY_G_FLAG, UNIVERSITY_LOC, GRA_SCHOOL,
+                        GRA_SCHOOL_FLAG1, GRA_SCHOOL_FLAG2, GRA_SCHOOL_SPEC, GRA_SCHOOL_G_YM, GRA_SCHOOLY_G_FLAG,
+                        GRA_SCHOOL_LOC, ARM_NM, ARM_STA_YMD, ARM_END_YMD, ARM_GUBUN,
+                        ARM_RANKS, LANG1, LANG1_EX, LANG1_SCORE, LANG1_LV,
+                        LANG1_JU, LANG2, LANG2_EX, LANG2_SCORE, LANG2_LV,
+                        LANG2_JU, LANG3, LANG3_EX, LANG3_SCORE, LANG3_LV,
+                        LANG3_JU, LANG4, LANG4_EX, LANG4_SCORE, LANG4_LV,
+                        LANG4_JU, LICE1_NM, LICE1_GRADE, LICE1_JU, LICE2_NM,
+                        LICE2_GRADE, LICE2_JU, LICE3_NM, LICE3_GRADE, LICE3_JU,
+                        CAR_STA_YM_1, CAR_END_YM_1, CAR_NM_1, CAR_JIK_1, CAR_JOB_1,
+                        CAR_RETIRE_1, CAR_STA_YM_2, CAR_END_YM_2, CAR_NM_2, CAR_JIK_2,
+                        CAR_JOB_2, CAR_RETIRE_2, CAR_STA_YM_3, CAR_END_YM_3, CAR_NM_3,
+                        CAR_JIK_3, CAR_JOB_3, CAR_RETIRE_3, CAR_STA_YM_4, CAR_END_YM_4,
+                        CAR_NM_4, CAR_JIK_4, CAR_JOB_4, CAR_RETIRE_4, PRIZEORG_1,
+                        PRIZECON_1, PRIZEDT_1, PRIZEORG_2, PRIZECON_2, PRIZEDT_2,
+                        PRIZEORG_3, PRIZECON_3, PRIZEDT_3, PRIZEORG_4, PRIZECON_4,
+                        PRIZEDT_4, SERVICE_NM_1, SERVICE_PERIOD_1, SERVICE_DETAIL_1, SERVICE_NM_2,
+                        SERVICE_PERIOD_2, SERVICE_DETAIL_2, CLUB_NM_1, CLUB_PERIOD_1, CLUB_DETAIL_1,
+                        CLUB_NM_2, CLUB_PERIOD_2, CLUB_DETAIL_2, CLUB_NM_3, CLUB_PERIOD_3,
+                        CLUB_DETAIL_3, TRAIN_NM_1, TRAIN_PERIOD_1, TRAIN_DETAIL_1, TRAIN_NM_2,
+                        TRAIN_PERIOD_2, TRAIN_DETAIL_2, TRAIN_NM_3, TRAIN_PERIOD_3, TRAIN_DETAIL_3,
+                        TRIP_NM_1, TRIP_PERIOD_1, TRIP_DETAIL_1, TRIP_NM_2, TRIP_PERIOD_2,
+                        TRIP_DETAIL_2, REASON, EXPERIENCE, SKILL
+                    FROM {SOURCE_SCHEMA}.{SOURCE_TABLE}
                 """
-                print(f"Executing: {select_sql}")
+                print(f"Executing: SELECT * FROM {SOURCE_SCHEMA}.{SOURCE_TABLE}")
                 cur.execute(select_sql)
                 raw_rows = cur.fetchall()
 
@@ -132,7 +162,7 @@ def extract_from_oracle():
                 return len(rows)
 
     except Exception as e:
-        log_error('extract_all', 'EXTRACT', e, SOURCE_TABLE, None)
+        log_error('extract_all', 'EXTRACT', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", None)
         raise
 
 
@@ -152,13 +182,58 @@ def load_to_stage():
                 cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{STAGE_TABLE}")
                 print(f"Truncated stage table: {TARGET_SCHEMA}.{STAGE_TABLE}")
 
-                # 데이터 적재 (load_date는 CURRENT_DATE로 자동 설정)
+                # 데이터 적재 (app.applicant_info의 모든 컬럼)
                 insert_sql = f"""
                     INSERT INTO {TARGET_SCHEMA}.{STAGE_TABLE}
-                    (id, candidate_id, full_name, gender, birth_year,
-                     education_level, years_experience, industry, role_title,
-                     resume_text, source_updated_at, load_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE)
+                    (
+                        APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
+                        BIRDT, ADRESS, NATION, APPLY_PATH, BOHUN_YN,
+                        BOHUN_RELATION, DISABLED_NM, DISABLED, HOBBY, HIGHSCHOOL,
+                        HIGH_FLAG1, HIGH_FLAG2, HIGH_G_YM, HIGH_G_FLAG, HIGH_LOC,
+                        JUNIOR_COLLEGE, JUNIOR_COLLEGE_FLAG1, JUNIOR_COLLEGE_FLAG2, JUNIOR_COLLEAGE_SPEC, JUNIOR_ENTER_YM,
+                        JUNIOR_ENTER_FLAG, JUNIOR_G_YM, JUNIOR_G_FLAG, JUNIOR_LOC, UNIVERSITY,
+                        UNIVERSITY_FLAG1, UNIVERSITY_FLAG2, UNIVERSITY_SPEC, UNIVERSITY_SPEC_SUB, UNIVERSITY_ENTER_YM,
+                        UNIVERSITY_ENTER_FLAG, UNIVERSITY_G_YM, UNIVERSITY_G_FLAG, UNIVERSITY_LOC, GRA_SCHOOL,
+                        GRA_SCHOOL_FLAG1, GRA_SCHOOL_FLAG2, GRA_SCHOOL_SPEC, GRA_SCHOOL_G_YM, GRA_SCHOOLY_G_FLAG,
+                        GRA_SCHOOL_LOC, ARM_NM, ARM_STA_YMD, ARM_END_YMD, ARM_GUBUN,
+                        ARM_RANKS, LANG1, LANG1_EX, LANG1_SCORE, LANG1_LV,
+                        LANG1_JU, LANG2, LANG2_EX, LANG2_SCORE, LANG2_LV,
+                        LANG2_JU, LANG3, LANG3_EX, LANG3_SCORE, LANG3_LV,
+                        LANG3_JU, LANG4, LANG4_EX, LANG4_SCORE, LANG4_LV,
+                        LANG4_JU, LICE1_NM, LICE1_GRADE, LICE1_JU, LICE2_NM,
+                        LICE2_GRADE, LICE2_JU, LICE3_NM, LICE3_GRADE, LICE3_JU,
+                        CAR_STA_YM_1, CAR_END_YM_1, CAR_NM_1, CAR_JIK_1, CAR_JOB_1,
+                        CAR_RETIRE_1, CAR_STA_YM_2, CAR_END_YM_2, CAR_NM_2, CAR_JIK_2,
+                        CAR_JOB_2, CAR_RETIRE_2, CAR_STA_YM_3, CAR_END_YM_3, CAR_NM_3,
+                        CAR_JIK_3, CAR_JOB_3, CAR_RETIRE_3, CAR_STA_YM_4, CAR_END_YM_4,
+                        CAR_NM_4, CAR_JIK_4, CAR_JOB_4, CAR_RETIRE_4, PRIZEORG_1,
+                        PRIZECON_1, PRIZEDT_1, PRIZEORG_2, PRIZECON_2, PRIZEDT_2,
+                        PRIZEORG_3, PRIZECON_3, PRIZEDT_3, PRIZEORG_4, PRIZECON_4,
+                        PRIZEDT_4, SERVICE_NM_1, SERVICE_PERIOD_1, SERVICE_DETAIL_1, SERVICE_NM_2,
+                        SERVICE_PERIOD_2, SERVICE_DETAIL_2, CLUB_NM_1, CLUB_PERIOD_1, CLUB_DETAIL_1,
+                        CLUB_NM_2, CLUB_PERIOD_2, CLUB_DETAIL_2, CLUB_NM_3, CLUB_PERIOD_3,
+                        CLUB_DETAIL_3, TRAIN_NM_1, TRAIN_PERIOD_1, TRAIN_DETAIL_1, TRAIN_NM_2,
+                        TRAIN_PERIOD_2, TRAIN_DETAIL_2, TRAIN_NM_3, TRAIN_PERIOD_3, TRAIN_DETAIL_3,
+                        TRIP_NM_1, TRIP_PERIOD_1, TRIP_DETAIL_1, TRIP_NM_2, TRIP_PERIOD_2,
+                        TRIP_DETAIL_2, REASON, EXPERIENCE, SKILL
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s
+                    )
                 """
 
                 print(f"Inserting {len(rows)} rows into stage table...")
@@ -169,7 +244,7 @@ def load_to_stage():
                 return len(rows)
 
     except Exception as e:
-        log_error('stage_load', 'LOAD', e, SOURCE_TABLE, STAGE_TABLE)
+        log_error('stage_load', 'LOAD', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", f"{TARGET_SCHEMA}.{STAGE_TABLE}")
         raise
 
 
@@ -203,7 +278,7 @@ def swap_and_replace():
                 return final_count
 
     except Exception as e:
-        log_error('swap_replace', 'LOAD', e, STAGE_TABLE, TARGET_TABLE)
+        log_error('swap_replace', 'LOAD', e, f"{TARGET_SCHEMA}.{STAGE_TABLE}", f"{TARGET_SCHEMA}.{TARGET_TABLE}")
         raise
 
 
@@ -243,24 +318,9 @@ def cleanup_old_data():
     """3년 초과 데이터 삭제 (보존정책)"""
     print(f"[{datetime.now()}] Cleaning up data older than {RETENTION_YEARS} years")
 
-    try:
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                # 3년 초과 데이터 삭제
-                cur.execute(f"""
-                    DELETE FROM {TARGET_SCHEMA}.{TARGET_TABLE}
-                    WHERE load_date < CURRENT_DATE - INTERVAL '{RETENTION_YEARS} years'
-                """)
-                deleted_count = cur.rowcount
-                conn.commit()
-
-                print(f"Deleted {deleted_count} rows older than {RETENTION_YEARS} years")
-                return deleted_count
-
-    except Exception as e:
-        print(f"Warning: Cleanup failed: {str(e)}")
-        # Cleanup 실패는 전체 파이프라인을 실패시키지 않음
-        return 0
+    # Note: applicant_info 테이블에는 load_date 컬럼이 없으므로 cleanup 건너뜀
+    print(f"Skipping cleanup - applicant_info table has no load_date column")
+    return 0
 
 
 def log_run_failure():

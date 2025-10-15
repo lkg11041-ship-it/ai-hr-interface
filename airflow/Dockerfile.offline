@@ -2,6 +2,8 @@
 # Airflow Dockerfile for Offline (Air-Gapped) Environment
 # ============================================================================
 #
+# Oracle → PostgreSQL ETL 전용 폐쇄망 배포 이미지
+#
 # 폐쇄망 배포 방법:
 # 1. 인터넷 연결된 환경에서 이미지 빌드
 # 2. 이미지를 tar 파일로 저장
@@ -39,26 +41,18 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# Stage 2: Python Dependencies (모든 의존성 포함)
+# Stage 2: Python Dependencies (ETL 전용)
 # ============================================================================
 USER airflow
 
 # requirements.txt 복사 (의존성 버전 고정)
 COPY requirements-offline.txt /tmp/requirements-offline.txt
 
-# Python 패키지 설치 (캐시 보존하여 재빌드 시 재사용 가능)
-# --no-deps 옵션 제거하여 모든 하위 의존성 포함
+# Python 패키지 설치 (Oracle → PostgreSQL ETL에 필요한 최소 패키지만 포함)
 RUN pip install --no-cache-dir -r /tmp/requirements-offline.txt
 
 # ============================================================================
-# Stage 3: Embedding Model Pre-download (선택 사항)
-# ============================================================================
-# 임베딩 모델을 이미지에 미리 포함 (약 80MB 추가)
-# 폐쇄망에서 모델 다운로드 불가능하므로 미리 다운로드
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
-
-# ============================================================================
-# Stage 4: Health Check
+# Stage 3: Health Check
 # ============================================================================
 # Airflow 스케줄러 헬스체크 (선택 사항)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -69,7 +63,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # ============================================================================
 LABEL maintainer="Recruit AI Team"
 LABEL version="1.0.0"
-LABEL description="Airflow for Offline/Air-Gapped Environment"
+LABEL description="Airflow for Oracle to PostgreSQL ETL (Offline/Air-Gapped Environment)"
 LABEL environment="production-offline"
 
 # 기본 명령어는 docker-compose에서 오버라이드됨
