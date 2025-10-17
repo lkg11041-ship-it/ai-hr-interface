@@ -2,8 +2,8 @@
 Oracle to PostgreSQL ETL Script for APPLICANT_INFO table
 Strategy: Full Reload (Truncate & Load)
 Features: Logging, Error handling, Data retention policy (3 years)
-Source: app.applicant_info (Oracle)
-Target: app.applicant_info (PostgreSQL)
+Source: rsaiif.applicant_info (Oracle)
+Target: rsaiif.applicant_info (PostgreSQL)
 """
 
 import os
@@ -31,9 +31,9 @@ PG_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 
 # Constants
 DAG_ID = "etl_oracle_to_postgres_recruit_daily"
-SOURCE_SCHEMA = "app"
+SOURCE_SCHEMA = "rsaiif"
 SOURCE_TABLE = "applicant_info"
-TARGET_SCHEMA = "app"
+TARGET_SCHEMA = "rsaiif"
 TARGET_TABLE = "applicant_info"
 BATCH_SIZE = 1000
 
@@ -47,7 +47,15 @@ _extraction_data = {
 
 
 def get_postgres_connection():
-    """PostgreSQL 연결 생성"""
+    """
+    PostgreSQL 연결 생성
+
+    연결 정보:
+    - Host: 10.149.172.233
+    - Database: rsaidb
+    - User: rs_ai_user
+    - 용도: Airflow 메타데이터 + ETL 타겟 DB
+    """
     return psycopg2.connect(
         host=PG_HOST,
         port=PG_PORT,
@@ -68,7 +76,7 @@ def get_oracle_connection():
 
     연결 형식:
     - DSN: <host>:<port>/<service_name>
-    - 예시: 10.0.0.21:1521/ORCLPDB1
+    - 예시: 10.253.41.229:1521/ORCLPDB1 (IF_IC0_TEMP_USER)
 
     주의사항:
     - SERVICE_NAME을 사용 (SID 아님)
@@ -139,7 +147,7 @@ def extract_from_oracle():
     try:
         with get_oracle_connection() as conn:
             with conn.cursor() as cur:
-                # 전체 데이터 조회 (app.applicant_info의 모든 컬럼)
+                # 전체 데이터 조회 (rsaiif.applicant_info의 모든 컬럼 - 149개)
                 select_sql = f"""
                     SELECT
                         APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
@@ -220,7 +228,7 @@ def load_to_production():
                 cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{TARGET_TABLE}")
                 print(f"Truncated production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
 
-                # 데이터 적재 (app.applicant_info의 모든 컬럼)
+                # 데이터 적재 (rsaiif.applicant_info의 모든 컬럼 - 149개)
                 insert_sql = f"""
                     INSERT INTO {TARGET_SCHEMA}.{TARGET_TABLE}
                     (
@@ -325,11 +333,14 @@ def log_run_success():
 
 
 def cleanup_old_data():
-    """3년 초과 데이터 삭제 (보존정책)"""
-    print(f"[{datetime.now()}] Cleaning up data older than {RETENTION_YEARS} years")
+    """
+    3년 초과 데이터 삭제 (보존정책)
 
-    # Note: applicant_info 테이블에는 load_date 컬럼이 없으므로 cleanup 건너뜀
-    print(f"Skipping cleanup - applicant_info table has no load_date column")
+    Note: rsaiif.applicant_info 테이블에는 load_date 컬럼이 없으므로 cleanup 건너뜀
+    Full Reload 전략으로 매번 전체 데이터를 교체하므로 별도 cleanup 불필요
+    """
+    print(f"[{datetime.now()}] Data cleanup check")
+    print(f"Skipping cleanup - rsaiif.applicant_info uses Full Reload strategy")
     return 0
 
 
