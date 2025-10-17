@@ -35,8 +35,6 @@ SOURCE_SCHEMA = "app"
 SOURCE_TABLE = "applicant_info"
 TARGET_SCHEMA = "app"
 TARGET_TABLE = "applicant_info"
-STAGE_TABLE = "applicant_info_stage"
-RETENTION_YEARS = 3
 BATCH_SIZE = 1000
 
 # Global state for sharing data between tasks
@@ -60,10 +58,47 @@ def get_postgres_connection():
 
 
 def get_oracle_connection():
-    """Oracle 연결 생성 (Thin mode - no Oracle Client required)"""
-    dsn = f"{ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}"
-    # Thin mode: pure Python implementation, no Oracle Client needed
-    return oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=dsn)
+    """
+    Oracle 연결 생성 (Thin mode - Oracle Client 불필요)
+
+    python-oracledb Thin mode 특징:
+    - Pure Python 구현 (Oracle Instant Client 설치 불필요)
+    - 폐쇄망 환경에서도 작동 (외부 라이브러리 의존성 없음)
+    - cx_Oracle 대비 가볍고 빠름
+
+    연결 형식:
+    - DSN: <host>:<port>/<service_name>
+    - 예시: 10.0.0.21:1521/ORCLPDB1
+
+    주의사항:
+    - SERVICE_NAME을 사용 (SID 아님)
+    - 방화벽에서 Oracle 포트(1521) 허용 필요
+    """
+    print(f"[DEBUG] Connecting to Oracle: {ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}")
+    print(f"[DEBUG] Oracle User: {ORACLE_USER}")
+
+    try:
+        # Thin mode로 연결 (params 명시)
+        connection = oracledb.connect(
+            user=ORACLE_USER,
+            password=ORACLE_PASSWORD,
+            host=ORACLE_HOST,
+            port=int(ORACLE_PORT),
+            service_name=ORACLE_SERVICE
+        )
+        print(f"[DEBUG] Oracle connection successful")
+        return connection
+    except oracledb.DatabaseError as e:
+        error_obj, = e.args
+        print(f"[ERROR] Oracle connection failed:")
+        print(f"  - Error Code: {error_obj.code}")
+        print(f"  - Error Message: {error_obj.message}")
+        print(f"  - Connection String: {ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}")
+        print(f"  - User: {ORACLE_USER}")
+        raise
+    except Exception as e:
+        print(f"[ERROR] Unexpected error during Oracle connection: {str(e)}")
+        raise
 
 
 def log_run_start():
@@ -166,9 +201,9 @@ def extract_from_oracle():
         raise
 
 
-def load_to_stage():
-    """Stage 테이블에 데이터 적재"""
-    print(f"[{datetime.now()}] Loading data to stage table: {TARGET_SCHEMA}.{STAGE_TABLE}")
+def load_to_production():
+    """운영 테이블에 직접 데이터 적재 (TRUNCATE & INSERT)"""
+    print(f"[{datetime.now()}] Loading data directly to production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
 
     rows = _extraction_data['rows']
     if not rows:
@@ -178,13 +213,16 @@ def load_to_stage():
     try:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
-                # Stage 테이블 초기화
-                cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{STAGE_TABLE}")
-                print(f"Truncated stage table: {TARGET_SCHEMA}.{STAGE_TABLE}")
+                # 트랜잭션 시작
+                cur.execute("BEGIN")
+
+                # 운영 테이블 초기화
+                cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{TARGET_TABLE}")
+                print(f"Truncated production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
 
                 # 데이터 적재 (app.applicant_info의 모든 컬럼)
                 insert_sql = f"""
-                    INSERT INTO {TARGET_SCHEMA}.{STAGE_TABLE}
+                    INSERT INTO {TARGET_SCHEMA}.{TARGET_TABLE}
                     (
                         APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
                         BIRDT, ADRESS, NATION, APPLY_PATH, BOHUN_YN,
@@ -236,49 +274,21 @@ def load_to_stage():
                     )
                 """
 
-                print(f"Inserting {len(rows)} rows into stage table...")
+                print(f"Inserting {len(rows)} rows into production table...")
                 execute_batch(cur, insert_sql, rows, page_size=BATCH_SIZE)
-                conn.commit()
-
-                print(f"Successfully loaded {len(rows)} rows to stage")
-                return len(rows)
-
-    except Exception as e:
-        log_error('stage_load', 'LOAD', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", f"{TARGET_SCHEMA}.{STAGE_TABLE}")
-        raise
-
-
-def swap_and_replace():
-    """원자적 교체: Stage -> Production 테이블"""
-    print(f"[{datetime.now()}] Swapping stage to production table")
-
-    try:
-        with get_postgres_connection() as conn:
-            with conn.cursor() as cur:
-                # 트랜잭션으로 원자적 교체
-                cur.execute(f"BEGIN")
-
-                # Production 테이블 초기화
-                cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{TARGET_TABLE}")
-                print(f"Truncated production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
-
-                # Stage에서 Production으로 데이터 복사
-                cur.execute(f"""
-                    INSERT INTO {TARGET_SCHEMA}.{TARGET_TABLE}
-                    SELECT * FROM {TARGET_SCHEMA}.{STAGE_TABLE}
-                """)
 
                 # 건수 확인
                 cur.execute(f"SELECT COUNT(*) FROM {TARGET_SCHEMA}.{TARGET_TABLE}")
                 final_count = cur.fetchone()[0]
 
-                cur.execute(f"COMMIT")
+                # 커밋
+                cur.execute("COMMIT")
 
-                print(f"Successfully swapped {final_count} rows to production table")
+                print(f"Successfully loaded {final_count} rows to production table")
                 return final_count
 
     except Exception as e:
-        log_error('swap_replace', 'LOAD', e, f"{TARGET_SCHEMA}.{STAGE_TABLE}", f"{TARGET_SCHEMA}.{TARGET_TABLE}")
+        log_error('load_production', 'LOAD', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", f"{TARGET_SCHEMA}.{TARGET_TABLE}")
         raise
 
 
@@ -392,8 +402,7 @@ if __name__ == "__main__":
     try:
         log_run_start()
         extract_from_oracle()
-        load_to_stage()
-        swap_and_replace()
+        load_to_production()
         log_run_success()
         cleanup_old_data()
         print("ETL completed successfully")

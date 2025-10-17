@@ -49,6 +49,10 @@ USER airflow
 COPY requirements-offline.txt /tmp/requirements-offline.txt
 
 # Python 패키지 설치 (Oracle → PostgreSQL ETL에 필요한 최소 패키지만 포함)
+# python-oracledb (Thin mode):
+#   - Pure Python 구현으로 Oracle Instant Client 불필요
+#   - cx_Oracle 대체 라이브러리
+#   - 폐쇄망 환경에서 Oracle 연결 가능
 RUN pip install --no-cache-dir -r /tmp/requirements-offline.txt
 
 # ============================================================================
