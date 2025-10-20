@@ -76,7 +76,7 @@ with DAG(
     )
 
     # Task Flow
-    # Oracle (10.253.41.229:ORCLPDB1/IF_IC0_TEMP_USER/rsaiif.applicant_info)
+    # Oracle (10.253.41.229:RECU/IF_IC0_TEMP_USER/rsaiif.applicant_info)
     #   → PostgreSQL (10.149.172.233:rsaidb/rs_ai_user/rsaiif.applicant_info)
     log_start >> extract_all >> load_production >> log_success >> cleanup_3y >> end
 

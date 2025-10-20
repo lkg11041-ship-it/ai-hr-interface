@@ -2,8 +2,12 @@
 Oracle to PostgreSQL ETL Script for APPLICANT_INFO table
 Strategy: Full Reload (Truncate & Load)
 Features: Logging, Error handling, Data retention policy (3 years)
-Source: rsaiif.applicant_info (Oracle)
+Source: rsaiif.applicant_info (Oracle 11g)
 Target: rsaiif.applicant_info (PostgreSQL)
+
+Oracle 11g 연결:
+- Thick Mode 사용 (Oracle Instant Client 21.13)
+- Thin mode는 Oracle 12.1+ 만 지원하므로 Thick mode 필수
 """
 
 import os
@@ -15,6 +19,22 @@ from typing import Optional, Dict, Any
 import oracledb
 import psycopg2
 from psycopg2.extras import execute_batch
+
+# ============================================================================
+# Oracle Thick Mode 초기화 (Oracle 11g 지원)
+# ============================================================================
+try:
+    # Thick mode 초기화 - Oracle Instant Client 사용
+    # lib_dir: Docker 이미지 내부의 Oracle Instant Client 경로
+    oracledb.init_oracle_client(lib_dir="/opt/oracle/instantclient")
+    print("[INFO] Oracle Thick Mode initialized successfully")
+    print("[INFO] Oracle Instant Client location: /opt/oracle/instantclient")
+    print("[INFO] This enables Oracle 11g connectivity")
+except Exception as e:
+    # 이미 초기화되었거나 Instant Client를 찾을 수 없는 경우
+    print(f"[WARN] Oracle Thick Mode initialization: {str(e)}")
+    print("[WARN] Will attempt connection in Thin mode (may fail for Oracle 11g)...")
+# ============================================================================
 
 # Environment Variables
 ORACLE_HOST = os.getenv("ORACLE_HOST")
@@ -67,46 +87,101 @@ def get_postgres_connection():
 
 def get_oracle_connection():
     """
-    Oracle 연결 생성 (Thin mode - Oracle Client 불필요)
+    Oracle 연결 생성 (Thick mode - Oracle 11g 지원)
 
-    python-oracledb Thin mode 특징:
-    - Pure Python 구현 (Oracle Instant Client 설치 불필요)
-    - 폐쇄망 환경에서도 작동 (외부 라이브러리 의존성 없음)
-    - cx_Oracle 대비 가볍고 빠름
+    python-oracledb Thick mode 특징:
+    - Oracle Instant Client 라이브러리 사용
+    - Oracle 11g, 12c, 18c, 19c, 21c 모두 지원
+    - Thin mode는 Oracle 12.1+ 만 지원하므로 11g는 Thick mode 필수
 
     연결 형식:
     - DSN: <host>:<port>/<service_name>
-    - 예시: 10.253.41.229:1521/ORCLPDB1 (IF_IC0_TEMP_USER)
+    - 예시: 10.253.41.229:1521/RECU (IF_IC0_TEMP_USER)
 
     주의사항:
-    - SERVICE_NAME을 사용 (SID 아님)
+    - Oracle Instant Client가 /opt/oracle/instantclient에 설치되어 있어야 함
+    - SERVICE_NAME 또는 SID 사용 가능
     - 방화벽에서 Oracle 포트(1521) 허용 필요
     """
-    print(f"[DEBUG] Connecting to Oracle: {ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}")
+    print(f"[DEBUG] Connecting to Oracle (Thick Mode): {ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}")
     print(f"[DEBUG] Oracle User: {ORACLE_USER}")
 
+    # 방법 1: makedsn() 사용 (Oracle 11g와 가장 호환성 좋음)
     try:
-        # Thin mode로 연결 (params 명시)
+        print("[DEBUG] Attempting connection method 1: makedsn() with SERVICE_NAME")
+        dsn = oracledb.makedsn(
+            host=ORACLE_HOST,
+            port=ORACLE_PORT,
+            service_name=ORACLE_SERVICE
+        )
+        print(f"[DEBUG] DSN created: {dsn}")
+
         connection = oracledb.connect(
             user=ORACLE_USER,
             password=ORACLE_PASSWORD,
-            host=ORACLE_HOST,
-            port=int(ORACLE_PORT),
-            service_name=ORACLE_SERVICE
+            dsn=dsn,
+            disable_oob=True,
+            tcp_connect_timeout=60.0,
+            retry_count=3,
+            retry_delay=3
         )
-        print(f"[DEBUG] Oracle connection successful")
+        print(f"[DEBUG] Oracle connection successful (method 1)")
         return connection
-    except oracledb.DatabaseError as e:
-        error_obj, = e.args
-        print(f"[ERROR] Oracle connection failed:")
-        print(f"  - Error Code: {error_obj.code}")
-        print(f"  - Error Message: {error_obj.message}")
-        print(f"  - Connection String: {ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}")
-        print(f"  - User: {ORACLE_USER}")
-        raise
-    except Exception as e:
-        print(f"[ERROR] Unexpected error during Oracle connection: {str(e)}")
-        raise
+    except Exception as e1:
+        print(f"[WARN] Method 1 failed: {str(e1)}")
+
+        # 방법 2: makedsn() with SID 사용 (일부 Oracle 11g는 SID만 지원)
+        try:
+            print("[DEBUG] Attempting connection method 2: makedsn() with SID")
+            dsn = oracledb.makedsn(
+                host=ORACLE_HOST,
+                port=ORACLE_PORT,
+                sid=ORACLE_SERVICE  # SERVICE_NAME 대신 SID로 시도
+            )
+            print(f"[DEBUG] DSN created: {dsn}")
+
+            connection = oracledb.connect(
+                user=ORACLE_USER,
+                password=ORACLE_PASSWORD,
+                dsn=dsn,
+                disable_oob=True,
+                tcp_connect_timeout=60.0,
+                retry_count=3,
+                retry_delay=3
+            )
+            print(f"[DEBUG] Oracle connection successful (method 2 - SID)")
+            return connection
+        except Exception as e2:
+            print(f"[WARN] Method 2 failed: {str(e2)}")
+
+            # 방법 3: Easy Connect 문자열 (가장 단순한 방식)
+            try:
+                print("[DEBUG] Attempting connection method 3: Easy Connect String")
+                dsn = f"{ORACLE_HOST}:{ORACLE_PORT}/{ORACLE_SERVICE}"
+                print(f"[DEBUG] DSN: {dsn}")
+
+                connection = oracledb.connect(
+                    user=ORACLE_USER,
+                    password=ORACLE_PASSWORD,
+                    dsn=dsn,
+                    disable_oob=True,
+                    tcp_connect_timeout=60.0
+                )
+                print(f"[DEBUG] Oracle connection successful (method 3)")
+                return connection
+            except Exception as e3:
+                print(f"[ERROR] All connection methods failed")
+                print(f"  Method 1 (SERVICE_NAME): {str(e1)}")
+                print(f"  Method 2 (SID): {str(e2)}")
+                print(f"  Method 3 (Easy Connect): {str(e3)}")
+                print(f"\n[SOLUTION] Oracle 11g 연결 문제 해결 방법:")
+                print(f"  1. Oracle 서버에서 SQLNET.ORA 수정:")
+                print(f"     SQLNET.ENCRYPTION_SERVER=ACCEPTED")
+                print(f"     SQLNET.CRYPTO_CHECKSUM_SERVER=ACCEPTED")
+                print(f"  2. Oracle 리스너 재시작: lsnrctl stop && lsnrctl start")
+                print(f"  3. 서비스명 확인: SELECT VALUE FROM V$PARAMETER WHERE NAME='service_names';")
+                print(f"  4. .env 파일에서 ORACLE_SERVICE를 SID로 변경 시도")
+                raise e1  # 첫 번째 에러를 raise
 
 
 def log_run_start():

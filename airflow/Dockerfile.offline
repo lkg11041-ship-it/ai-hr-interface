@@ -27,7 +27,7 @@ FROM apache/airflow:2.9.2-python3.11
 # ============================================================================
 USER root
 
-# 시스템 패키지 설치 (apt 캐시 유지하지 않음)
+# 시스템 패키지 설치 (Oracle Instant Client 의존성 포함)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -37,8 +37,32 @@ RUN apt-get update && \
         vim \
         net-tools \
         telnet \
-        iputils-ping && \
+        iputils-ping \
+        libaio1 \
+        unzip && \
     rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Stage 1.5: Oracle Instant Client Installation (Thick Mode for Oracle 11g)
+# ============================================================================
+# Oracle Instant Client 다운로드 및 설치
+# 버전: 21.13 (Oracle 11g, 12c, 18c, 19c, 21c 모두 지원)
+# 폐쇄망 배포 시 주의: 이 단계는 인터넷 연결 환경에서만 실행됩니다
+
+WORKDIR /opt/oracle
+
+# Oracle Instant Client Basic 다운로드
+RUN wget -q https://download.oracle.com/otn_software/linux/instantclient/2113000/instantclient-basic-linux.x64-21.13.0.0.0dbru.zip && \
+    unzip instantclient-basic-linux.x64-21.13.0.0.0dbru.zip && \
+    rm -f instantclient-basic-linux.x64-21.13.0.0.0dbru.zip && \
+    mv instantclient_21_13 instantclient
+
+# 라이브러리 경로 설정
+ENV LD_LIBRARY_PATH=/opt/oracle/instantclient:$LD_LIBRARY_PATH
+ENV PATH=/opt/oracle/instantclient:$PATH
+
+# Oracle Instant Client 권한 설정
+RUN chmod -R 755 /opt/oracle/instantclient
 
 # ============================================================================
 # Stage 2: Python Dependencies (ETL 전용)
@@ -49,10 +73,10 @@ USER airflow
 COPY requirements-offline.txt /tmp/requirements-offline.txt
 
 # Python 패키지 설치 (Oracle → PostgreSQL ETL에 필요한 최소 패키지만 포함)
-# python-oracledb (Thin mode):
-#   - Pure Python 구현으로 Oracle Instant Client 불필요
+# python-oracledb (Thick mode - Oracle 11g 지원):
+#   - Thick mode: Oracle Instant Client 사용 (Oracle 11g 호환)
+#   - Thin mode는 Oracle 12.1 이상만 지원하므로 Thick mode 필수
 #   - cx_Oracle 대체 라이브러리
-#   - 폐쇄망 환경에서 Oracle 연결 가능
 RUN pip install --no-cache-dir -r /tmp/requirements-offline.txt
 
 # ============================================================================
