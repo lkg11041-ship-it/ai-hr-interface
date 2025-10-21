@@ -123,9 +123,20 @@ def get_oracle_connection():
             disable_oob=True,
             tcp_connect_timeout=60.0,
             retry_count=3,
-            retry_delay=3
+            retry_delay=3,
+            encoding="UTF-8",           # 클라이언트 인코딩: UTF-8
+            nencoding="UTF-8"            # NCHAR 인코딩: UTF-8
         )
+
+        # NLS 세션 파라미터 설정 (한글 처리)
+        cursor = connection.cursor()
+        cursor.execute("ALTER SESSION SET NLS_LANGUAGE='KOREAN'")
+        cursor.execute("ALTER SESSION SET NLS_TERRITORY='KOREA'")
+        cursor.execute("ALTER SESSION SET NLS_CHARACTERSET='AL32UTF8'")
+        cursor.close()
+
         print(f"[DEBUG] Oracle connection successful (method 1)")
+        print(f"[DEBUG] NLS settings: KOREAN/KOREA/AL32UTF8")
         return connection
     except Exception as e1:
         print(f"[WARN] Method 1 failed: {str(e1)}")
@@ -147,9 +158,20 @@ def get_oracle_connection():
                 disable_oob=True,
                 tcp_connect_timeout=60.0,
                 retry_count=3,
-                retry_delay=3
+                retry_delay=3,
+                encoding="UTF-8",
+                nencoding="UTF-8"
             )
+
+            # NLS 세션 파라미터 설정
+            cursor = connection.cursor()
+            cursor.execute("ALTER SESSION SET NLS_LANGUAGE='KOREAN'")
+            cursor.execute("ALTER SESSION SET NLS_TERRITORY='KOREA'")
+            cursor.execute("ALTER SESSION SET NLS_CHARACTERSET='AL32UTF8'")
+            cursor.close()
+
             print(f"[DEBUG] Oracle connection successful (method 2 - SID)")
+            print(f"[DEBUG] NLS settings: KOREAN/KOREA/AL32UTF8")
             return connection
         except Exception as e2:
             print(f"[WARN] Method 2 failed: {str(e2)}")
@@ -165,9 +187,20 @@ def get_oracle_connection():
                     password=ORACLE_PASSWORD,
                     dsn=dsn,
                     disable_oob=True,
-                    tcp_connect_timeout=60.0
+                    tcp_connect_timeout=60.0,
+                    encoding="UTF-8",
+                    nencoding="UTF-8"
                 )
+
+                # NLS 세션 파라미터 설정
+                cursor = connection.cursor()
+                cursor.execute("ALTER SESSION SET NLS_LANGUAGE='KOREAN'")
+                cursor.execute("ALTER SESSION SET NLS_TERRITORY='KOREA'")
+                cursor.execute("ALTER SESSION SET NLS_CHARACTERSET='AL32UTF8'")
+                cursor.close()
+
                 print(f"[DEBUG] Oracle connection successful (method 3)")
+                print(f"[DEBUG] NLS settings: KOREAN/KOREA/AL32UTF8")
                 return connection
             except Exception as e3:
                 print(f"[ERROR] All connection methods failed")
@@ -216,13 +249,51 @@ def log_run_start():
 
 
 def extract_from_oracle():
-    """Oracle에서 전체 데이터 추출"""
-    print(f"[{datetime.now()}] Extracting data from Oracle: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
+    """
+    Oracle에서 전체 데이터 건수 확인 (연결 테스트)
+
+    Airflow에서는 task 간 메모리 공유가 불가능하므로,
+    extract 단계에서는 건수만 확인하고,
+    load 단계에서 Oracle에서 직접 읽어서 PostgreSQL에 적재합니다.
+    """
+    print(f"[{datetime.now()}] Checking Oracle connection and row count: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
 
     try:
         with get_oracle_connection() as conn:
             with conn.cursor() as cur:
-                # 전체 데이터 조회 (rsaiif.applicant_info의 모든 컬럼 - 149개)
+                # 건수만 확인
+                count_sql = f"SELECT COUNT(*) FROM {SOURCE_SCHEMA}.{SOURCE_TABLE}"
+                print(f"Executing: {count_sql}")
+                cur.execute(count_sql)
+                row_count = cur.fetchone()[0]
+
+                print(f"Oracle table has {row_count} rows")
+
+                # 전역 변수 업데이트 (로컬 테스트용)
+                _extraction_data['row_count'] = row_count
+
+                return row_count
+
+    except Exception as e:
+        log_error('extract_all', 'EXTRACT', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", None)
+        raise
+
+
+def load_to_production():
+    """
+    Oracle에서 데이터를 읽어 PostgreSQL 운영 테이블에 직접 적재 (TRUNCATE & INSERT)
+
+    Airflow에서는 task 간 메모리가 공유되지 않으므로,
+    이 함수에서 Oracle 연결을 다시 열어 데이터를 읽습니다.
+    """
+    print(f"[{datetime.now()}] Loading data from Oracle to PostgreSQL production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
+
+    try:
+        # Step 1: Oracle에서 데이터 추출
+        print(f"[{datetime.now()}] Extracting data from Oracle: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
+        with get_oracle_connection() as oracle_conn:
+            with oracle_conn.cursor() as oracle_cur:
+                # 전체 데이터 조회
                 select_sql = f"""
                     SELECT
                         APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
@@ -258,42 +329,84 @@ def extract_from_oracle():
                     FROM {SOURCE_SCHEMA}.{SOURCE_TABLE}
                 """
                 print(f"Executing: SELECT * FROM {SOURCE_SCHEMA}.{SOURCE_TABLE}")
-                cur.execute(select_sql)
-                raw_rows = cur.fetchall()
+                oracle_cur.execute(select_sql)
+                raw_rows = oracle_cur.fetchall()
 
-                # Convert Oracle LOB objects to strings
+                # Convert Oracle LOB objects and handle character encoding
+                # Oracle: ASCII7 (US7ASCII) → PostgreSQL: UTF8
                 rows = []
-                for row in raw_rows:
+                conversion_errors = 0
+
+                for row_idx, row in enumerate(raw_rows):
                     converted_row = []
-                    for value in row:
-                        # Convert LOB (CLOB/BLOB) to string/bytes
-                        if hasattr(value, 'read'):
-                            converted_row.append(value.read())
-                        else:
-                            converted_row.append(value)
+                    for col_idx, value in enumerate(row):
+                        try:
+                            # Convert LOB (CLOB/BLOB) to string/bytes
+                            if hasattr(value, 'read'):
+                                lob_data = value.read()
+                                # LOB 데이터 인코딩 변환
+                                if isinstance(lob_data, bytes):
+                                    # bytes → str (latin1로 디코드 후 UTF-8로 재인코딩)
+                                    value = lob_data.decode('latin1', errors='replace')
+                                else:
+                                    value = lob_data
+
+                            # 문자열 인코딩 변환 (Oracle ASCII7 → UTF-8)
+                            if isinstance(value, str):
+                                # 한글이 깨진 경우 복구 시도
+                                # Oracle ASCII7에서 한글은 latin1로 잘못 인코딩되어 있을 수 있음
+                                try:
+                                    # 방법 1: 이미 UTF-8인 경우 그대로 사용
+                                    value.encode('utf-8')
+                                    converted_value = value
+                                except UnicodeEncodeError:
+                                    # 방법 2: latin1 → UTF-8 변환 시도
+                                    try:
+                                        converted_value = value.encode('latin1').decode('utf-8', errors='replace')
+                                    except (UnicodeDecodeError, UnicodeEncodeError):
+                                        # 방법 3: 변환 실패 시 원본 유지 (replace 모드로)
+                                        converted_value = value
+                                        conversion_errors += 1
+
+                                converted_row.append(converted_value)
+
+                            elif isinstance(value, bytes):
+                                # bytes 타입은 UTF-8로 디코드
+                                try:
+                                    # 방법 1: UTF-8 디코드 시도
+                                    converted_value = value.decode('utf-8', errors='ignore')
+                                except UnicodeDecodeError:
+                                    # 방법 2: latin1 → UTF-8 변환
+                                    try:
+                                        converted_value = value.decode('latin1', errors='replace')
+                                    except UnicodeDecodeError:
+                                        # 방법 3: ASCII로 대체
+                                        converted_value = value.decode('ascii', errors='replace')
+                                        conversion_errors += 1
+
+                                converted_row.append(converted_value)
+
+                            else:
+                                # 숫자, 날짜 등 다른 타입은 그대로 유지
+                                converted_row.append(value)
+
+                        except Exception as e:
+                            # 변환 중 예외 발생 시 None으로 대체
+                            print(f"[WARN] Encoding conversion error at row {row_idx}, col {col_idx}: {str(e)}")
+                            converted_row.append(None)
+                            conversion_errors += 1
+
                     rows.append(tuple(converted_row))
 
-                _extraction_data['rows'] = rows
-                _extraction_data['row_count'] = len(rows)
-
                 print(f"Extracted {len(rows)} rows from Oracle")
-                return len(rows)
+                if conversion_errors > 0:
+                    print(f"[WARN] Character encoding conversion errors: {conversion_errors} values")
 
-    except Exception as e:
-        log_error('extract_all', 'EXTRACT', e, f"{SOURCE_SCHEMA}.{SOURCE_TABLE}", None)
-        raise
+        if not rows:
+            print("No data to load")
+            return 0
 
-
-def load_to_production():
-    """운영 테이블에 직접 데이터 적재 (TRUNCATE & INSERT)"""
-    print(f"[{datetime.now()}] Loading data directly to production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
-
-    rows = _extraction_data['rows']
-    if not rows:
-        print("No data to load")
-        return 0
-
-    try:
+        # Step 2: PostgreSQL에 적재
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 # 트랜잭션 시작
@@ -376,14 +489,40 @@ def load_to_production():
 
 
 def log_run_success():
-    """ETL 성공 로그 기록"""
+    """
+    ETL 성공 로그 기록
+
+    Airflow에서는 task 간 메모리가 공유되지 않으므로,
+    run_history 테이블에서 최신 IN_PROGRESS 상태의 run을 찾아 업데이트합니다.
+    """
     print(f"[{datetime.now()}] Logging ETL success")
 
     finished_at = datetime.now()
-    duration_ms = int((finished_at - _extraction_data['started_at']).total_seconds() * 1000)
 
     with get_postgres_connection() as conn:
         with conn.cursor() as cur:
+            # 최신 IN_PROGRESS 상태의 run_id와 시작 시간 조회
+            cur.execute(f"""
+                SELECT run_id, started_at
+                FROM {TARGET_SCHEMA}.run_history
+                WHERE dag_id = %s AND status = 'IN_PROGRESS'
+                ORDER BY run_id DESC
+                LIMIT 1
+            """, (DAG_ID,))
+
+            result = cur.fetchone()
+            if not result:
+                print("[WARN] No IN_PROGRESS run found to update")
+                return
+
+            run_id, started_at = result
+            duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+
+            # 운영 테이블의 row count 조회
+            cur.execute(f"SELECT COUNT(*) FROM {TARGET_SCHEMA}.{TARGET_TABLE}")
+            row_count = cur.fetchone()[0]
+
+            # 성공 상태로 업데이트
             cur.execute(f"""
                 UPDATE {TARGET_SCHEMA}.run_history
                 SET status = %s,
@@ -395,40 +534,50 @@ def log_run_success():
                 WHERE run_id = %s
             """, (
                 'SUCCESS',
-                _extraction_data['row_count'],
-                _extraction_data['row_count'],
+                row_count,
+                row_count,
                 finished_at,
                 duration_ms,
-                f"Successfully processed {_extraction_data['row_count']} rows",
-                _extraction_data['run_id']
+                f"Successfully processed {row_count} rows",
+                run_id
             ))
             conn.commit()
 
-    print(f"ETL completed successfully. Duration: {duration_ms}ms")
-
-
-def cleanup_old_data():
-    """
-    3년 초과 데이터 삭제 (보존정책)
-
-    Note: rsaiif.applicant_info 테이블에는 load_date 컬럼이 없으므로 cleanup 건너뜀
-    Full Reload 전략으로 매번 전체 데이터를 교체하므로 별도 cleanup 불필요
-    """
-    print(f"[{datetime.now()}] Data cleanup check")
-    print(f"Skipping cleanup - rsaiif.applicant_info uses Full Reload strategy")
-    return 0
+    print(f"ETL completed successfully. Run ID: {run_id}, Duration: {duration_ms}ms, Rows: {row_count}")
 
 
 def log_run_failure():
-    """ETL 실패 로그 기록"""
+    """
+    ETL 실패 로그 기록
+
+    Airflow에서는 task 간 메모리가 공유되지 않으므로,
+    run_history 테이블에서 최신 IN_PROGRESS 상태의 run을 찾아 업데이트합니다.
+    """
     print(f"[{datetime.now()}] Logging ETL failure")
 
     finished_at = datetime.now()
-    duration_ms = int((finished_at - _extraction_data['started_at']).total_seconds() * 1000)
 
     try:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                # 최신 IN_PROGRESS 상태의 run_id와 시작 시간 조회
+                cur.execute(f"""
+                    SELECT run_id, started_at
+                    FROM {TARGET_SCHEMA}.run_history
+                    WHERE dag_id = %s AND status = 'IN_PROGRESS'
+                    ORDER BY run_id DESC
+                    LIMIT 1
+                """, (DAG_ID,))
+
+                result = cur.fetchone()
+                if not result:
+                    print("[WARN] No IN_PROGRESS run found to update")
+                    return
+
+                run_id, started_at = result
+                duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+
+                # 실패 상태로 업데이트
                 cur.execute(f"""
                     UPDATE {TARGET_SCHEMA}.run_history
                     SET status = %s,
@@ -441,15 +590,21 @@ def log_run_failure():
                     finished_at,
                     duration_ms,
                     "ETL pipeline failed - see error_log for details",
-                    _extraction_data['run_id']
+                    run_id
                 ))
                 conn.commit()
+                print(f"ETL failure logged. Run ID: {run_id}")
     except Exception as e:
         print(f"Error logging failure: {str(e)}")
 
 
 def log_error(task_id: str, step: str, error: Exception, source_table: Optional[str], target_table: Optional[str]):
-    """에러 로그 적재"""
+    """
+    에러 로그 적재
+
+    Airflow에서는 task 간 메모리가 공유되지 않으므로,
+    run_history 테이블에서 최신 IN_PROGRESS 상태의 run_id를 조회하여 사용합니다.
+    """
     error_message = str(error)
     error_class = type(error).__name__
     stack_trace = traceback.format_exc()
@@ -460,13 +615,26 @@ def log_error(task_id: str, step: str, error: Exception, source_table: Optional[
     try:
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
+                # 최신 IN_PROGRESS 상태의 run_id 조회
+                cur.execute(f"""
+                    SELECT run_id
+                    FROM {TARGET_SCHEMA}.run_history
+                    WHERE dag_id = %s AND status = 'IN_PROGRESS'
+                    ORDER BY run_id DESC
+                    LIMIT 1
+                """, (DAG_ID,))
+
+                result = cur.fetchone()
+                run_id = result[0] if result else None
+
+                # 에러 로그 삽입
                 cur.execute(f"""
                     INSERT INTO {TARGET_SCHEMA}.error_log
                     (run_id, dag_id, task_id, step, error_class, error_message,
                      stacktrace, source_table, target_table, error_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    _extraction_data.get('run_id'),
+                    run_id,
                     DAG_ID,
                     task_id,
                     step,
@@ -478,9 +646,9 @@ def log_error(task_id: str, step: str, error: Exception, source_table: Optional[
                     datetime.now()
                 ))
                 conn.commit()
-                print("Error logged to error_log table")
-    except Exception as log_error:
-        print(f"Failed to log error: {str(log_error)}")
+                print(f"Error logged to error_log table (run_id: {run_id})")
+    except Exception as log_err:
+        print(f"Failed to log error: {str(log_err)}")
 
 
 if __name__ == "__main__":
@@ -490,7 +658,6 @@ if __name__ == "__main__":
         extract_from_oracle()
         load_to_production()
         log_run_success()
-        cleanup_old_data()
         print("ETL completed successfully")
     except Exception as e:
         log_run_failure()

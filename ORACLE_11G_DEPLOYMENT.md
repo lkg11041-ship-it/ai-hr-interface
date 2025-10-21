@@ -98,15 +98,23 @@ POSTGRES_HOST=10.149.172.233
 POSTGRES_PORT=5432
 POSTGRES_DB=rsaidb
 POSTGRES_USER=rs_ai_user
-POSTGRES_PASSWORD="tlstprP1@#"
+POSTGRES_PASSWORD='tlstprP1@#'   # ⚠️ 주의: 작은따옴표 사용! (# 문자 포함)
 
 # Oracle 설정 (Oracle 11g)
 ORACLE_HOST=10.253.41.229
 ORACLE_PORT=1521
 ORACLE_SERVICE=RECU              # SERVICE_NAME 또는 SID
 ORACLE_USER=IF_IC0_TEMP_USER
-ORACLE_PASSWORD="eykk1275#"
+ORACLE_PASSWORD='eykk1275#'      # ⚠️ 주의: 작은따옴표 사용! (# 문자 포함)
 ```
+
+**⚠️ 패스워드 특수문자 주의사항**:
+- 패스워드에 `#`, `$`, `!` 등 특수문자가 포함된 경우 **반드시 작은따옴표(`'`)로 감싸야 합니다**
+- `#` 문자는 `.env` 파일에서 주석으로 인식되므로 따옴표 없이 사용 시 비밀번호가 잘립니다
+- 예시:
+  - ✅ 올바름: `POSTGRES_PASSWORD='tlstprP1@#'`
+  - ❌ 잘못됨: `POSTGRES_PASSWORD=tlstprP1@#` (# 이후 무시됨)
+  - ⚠️ 주의: `POSTGRES_PASSWORD="tlstprP1@#"` (큰따옴표는 일부 환경에서 문제 발생)
 
 ### 6단계: Airflow 배포
 
