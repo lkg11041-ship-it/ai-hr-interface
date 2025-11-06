@@ -1,5 +1,0 @@
-{
-  "phase_results_processors": [
-    { "score-ranker-processor": { "combination": { "technique": "rrf" } } }
-  ]
-}

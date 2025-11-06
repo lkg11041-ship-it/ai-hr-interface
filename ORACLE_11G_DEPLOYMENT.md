@@ -101,7 +101,7 @@ POSTGRES_USER=rs_ai_user
 POSTGRES_PASSWORD='tlstprP1@#'   # ⚠️ 주의: 작은따옴표 사용! (# 문자 포함)
 
 # Oracle 설정 (Oracle 11g)
-ORACLE_HOST=10.253.41.229
+ORACLE_HOST=10.253.41.194
 ORACLE_PORT=1521
 ORACLE_SERVICE=RECU              # SERVICE_NAME 또는 SID
 ORACLE_USER=IF_IC0_TEMP_USER
@@ -164,7 +164,7 @@ print(f"Oracle client version: {oracledb.clientversion()}")
 conn = oracledb.connect(
     user='IF_IC0_TEMP_USER',
     password='eykk1275#',
-    host='10.253.41.229',
+    host='10.253.41.194',
     port=1521,
     service_name='RECU'
 )
@@ -198,7 +198,7 @@ PW: admin
 2. DAG 활성화 (토글 스위치 ON)
 3. "Trigger DAG" 버튼 클릭하여 수동 실행
 4. 로그 확인:
-   - `[DEBUG] Connecting to Oracle (Thick Mode): 10.253.41.229:1521/RECU`
+   - `[DEBUG] Connecting to Oracle (Thick Mode): 10.253.41.194:1521/RECU`
    - `[DEBUG] Oracle connection successful (method 1)`
    - `Extracted XXX rows from Oracle`
    - `Successfully loaded XXX rows to production table`

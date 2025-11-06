@@ -39,7 +39,7 @@ except Exception as e:
 # Environment Variables
 ORACLE_HOST = os.getenv("ORACLE_HOST")
 ORACLE_PORT = os.getenv("ORACLE_PORT", "1521")
-ORACLE_SERVICE = os.getenv("ORACLE_SERVICE", "XEPDB1")
+ORACLE_SERVICE = os.getenv("ORACLE_SERVICE", "RECU")
 ORACLE_USER = os.getenv("ORACLE_USER")
 ORACLE_PASSWORD = os.getenv("ORACLE_PASSWORD")
 
@@ -51,8 +51,8 @@ PG_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 
 # Constants
 DAG_ID = "etl_oracle_to_postgres_recruit_daily"
-SOURCE_SCHEMA = "rsaiif"
-SOURCE_TABLE = "applicant_info"
+SOURCE_SCHEMA = "IF_IC0_TEMP_USER"
+SOURCE_TABLE = "APPLICANT_INFO"
 TARGET_SCHEMA = "rsaiif"
 TARGET_TABLE = "applicant_info"
 BATCH_SIZE = 1000
@@ -96,7 +96,7 @@ def get_oracle_connection():
 
     연결 형식:
     - DSN: <host>:<port>/<service_name>
-    - 예시: 10.253.41.229:1521/RECU (IF_IC0_TEMP_USER)
+    - 예시: 10.253.41.194:1521/RECU (IF_IC0_TEMP_USER)
 
     주의사항:
     - Oracle Instant Client가 /opt/oracle/instantclient에 설치되어 있어야 함
@@ -293,10 +293,11 @@ def load_to_production():
         print(f"[{datetime.now()}] Extracting data from Oracle: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
         with get_oracle_connection() as oracle_conn:
             with oracle_conn.cursor() as oracle_cur:
-                # 전체 데이터 조회
+                # 전체 데이터 조회 (새 스키마: SREC.APPLICANT_INFO_TEMP - 155개 컬럼)
                 select_sql = f"""
                     SELECT
-                        APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
+                        PK_KEY, NOTIYY, BALNO, NOTINO, RESNO,
+                        SCRCOMPCD, COMPANY_NM, NAME, JOB_NM, LOC_NM,
                         BIRDT, ADRESS, NATION, APPLY_PATH, BOHUN_YN,
                         BOHUN_RELATION, DISABLED_NM, DISABLED, HOBBY, HIGHSCHOOL,
                         HIGH_FLAG1, HIGH_FLAG2, HIGH_G_YM, HIGH_G_FLAG, HIGH_LOC,
@@ -416,11 +417,12 @@ def load_to_production():
                 cur.execute(f"TRUNCATE TABLE {TARGET_SCHEMA}.{TARGET_TABLE}")
                 print(f"Truncated production table: {TARGET_SCHEMA}.{TARGET_TABLE}")
 
-                # 데이터 적재 (rsaiif.applicant_info의 모든 컬럼 - 149개)
+                # 데이터 적재 (rsaiif.applicant_info의 모든 컬럼 - 155개)
                 insert_sql = f"""
                     INSERT INTO {TARGET_SCHEMA}.{TARGET_TABLE}
                     (
-                        APPLICANT_INFO_ID, COMPANY_NM, NAME, JOB_NM, LOC_NM,
+                        PK_KEY, NOTIYY, BALNO, NOTINO, RESNO,
+                        SCRCOMPCD, COMPANY_NM, NAME, JOB_NM, LOC_NM,
                         BIRDT, ADRESS, NATION, APPLY_PATH, BOHUN_YN,
                         BOHUN_RELATION, DISABLED_NM, DISABLED, HOBBY, HIGHSCHOOL,
                         HIGH_FLAG1, HIGH_FLAG2, HIGH_G_YM, HIGH_G_FLAG, HIGH_LOC,
@@ -466,7 +468,8 @@ def load_to_production():
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
                     )
                 """
 

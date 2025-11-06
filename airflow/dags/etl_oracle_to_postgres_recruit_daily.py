@@ -18,7 +18,7 @@ default_args = {
 with DAG(
     dag_id="etl_oracle_to_postgres_recruit_daily",
     default_args=default_args,
-    description='Daily ETL: Oracle rsaiif.applicant_info -> PostgreSQL rsaiif.applicant_info with full reload strategy',
+    description='Daily ETL: Oracle SREC.APPLICANT_INFO_TEMP -> PostgreSQL rsaiif.applicant_info with full reload strategy',
     schedule_interval="30 2 * * *",  # 매일 02:30 실행
     start_date=datetime(2025, 10, 3),
     catchup=False,
@@ -32,7 +32,7 @@ with DAG(
                                 __import__('oracle_recruitment_etl').log_run_start(),
     )
 
-    # Task 2: Oracle에서 전체 데이터 추출 (rsaiif.applicant_info - 149개 컬럼)
+    # Task 2: Oracle에서 전체 데이터 추출 (SREC.APPLICANT_INFO_TEMP - 155개 컬럼)
     extract_all = PythonOperator(
         task_id='extract_all',
         python_callable=lambda: __import__('sys').path.insert(0, '/opt/airflow/dags/scripts') or
@@ -69,7 +69,7 @@ with DAG(
     )
 
     # Task Flow
-    # Oracle (10.253.41.229:RECU/IF_IC0_TEMP_USER/rsaiif.applicant_info)
+    # Oracle (10.253.41.194:RECU/IF_IC0_TEMP_USER/SREC.APPLICANT_INFO_TEMP)
     #   → PostgreSQL (10.149.172.233:rsaidb/rs_ai_user/rsaiif.applicant_info)
     log_start >> extract_all >> load_production >> log_success >> end
 
